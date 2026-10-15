@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#17191f">
+  <meta name="description" content="CodeTree Mobile — organize e edite projetos de código no celular.">
+  <title>CodeTree Mobile</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="menuBtn" class="icon-btn" aria-label="Abrir arquivos">☰</button>
+    <div class="brand"><span class="brand-mark">⌘</span><span>CodeTree <small>Mobile</small></span></div>
+    <button id="saveBtn" class="icon-btn" title="Salvar agora" aria-label="Salvar">✓</button>
+  </header>
+
+  <main class="app">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-head">
+        <div><span class="eyebrow">EXPLORADOR</span><h1 id="projectTitle">Meu projeto</h1></div>
+        <button id="projectMenuBtn" class="icon-btn" title="Renomear projeto">⋯</button>
+      </div>
+      <div class="toolbar">
+        <button id="newFileBtn" title="Novo arquivo">＋ Arquivo</button>
+        <button id="newFolderBtn" title="Nova pasta">＋ Pasta</button>
+      </div>
+      <div class="toolbar secondary">
+        <button id="importZipBtn">Importar ZIP</button>
+        <button id="importFolderBtn">Conectar pasta</button>
+        <input id="zipInput" type="file" accept=".zip,application/zip" hidden>
+        <input id="folderInput" type="file" webkitdirectory multiple hidden>
+      </div>
+      <label class="search-wrap"><span>⌕</span><input id="searchInput" type="search" placeholder="Filtrar arquivos"></label>
+      <div id="tree" class="tree" role="tree" aria-label="Arquivos do projeto"></div>
+      <div class="sidebar-foot">
+        <button id="exportBtn" class="primary-btn">⇩ Exportar projeto ZIP</button>
+        <button id="downloadCurrentBtn" class="quiet-btn">Baixar arquivo aberto</button>
+        <div id="storageStatus" class="status-line">Salvo neste navegador</div>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div id="tabs" class="tabs"><div class="empty-tab">Nenhum arquivo aberto</div></div>
+      <div id="welcome" class="welcome">
+        <div class="welcome-icon">⌘</div>
+        <h2>Seu projeto, em qualquer lugar.</h2>
+        <p>Crie arquivos, organize pastas e edite HTML, CSS e JavaScript.</p>
+        <div class="welcome-actions">
+          <button id="welcomeFileBtn" class="primary-btn">＋ Criar arquivo</button>
+          <button id="welcomeImportBtn" class="quiet-btn">Importar projeto</button>
+        </div>
+        <div class="tip">Dica: em navegadores compatíveis, use “Conectar pasta” e permita acesso de leitura e escrita para salvar diretamente nos arquivos reais. Caso contrário, o projeto fica salvo neste navegador.</div>
+      </div>
+      <div id="editorArea" class="editor-area" hidden>
+        <div class="file-crumb" id="fileCrumb"></div>
+        <textarea id="codeEditor" aria-label="Editor de código"></textarea>
+        <div class="editor-status"><span id="languageLabel">Texto simples</span><span id="cursorLabel">Linha 1, Coluna 1</span><span id="dirtyLabel">Salvo</span></div>
+      </div>
+      <div id="mobileOverlay" class="mobile-overlay"></div>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="nameDialog" class="modal">
+    <form method="dialog" id="nameForm">
+      <h2 id="dialogTitle">Novo arquivo</h2>
+      <label id="nameLabel" for="nameInput">Nome</label>
+      <input id="nameInput" required maxlength="160" autocomplete="off" placeholder="ex.: index.html">
+      <p id="dialogHint" class="dialog-hint">Use um nome com extensão, como .html, .css ou .js.</p>
+      <div class="modal-actions"><button value="cancel" class="quiet-btn">Cancelar</button><button id="confirmNameBtn" value="ok" class="primary-btn">Criar</button></div>
+    </form>
+  </dialog>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
