@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="pt-BR">
 <head>
@@ -14,6 +15,7 @@
   <header class="topbar">
     <button id="menuBtn" class="icon-btn" aria-label="Abrir arquivos">☰</button>
     <div class="brand"><span class="brand-mark">⌘</span><span>CodeTree <small>Mobile</small></span></div>
+    <button id="previewBtn" class="preview-top-btn" title="Abrir prévia do site" aria-pressed="false">▶ Prévia</button>
     <button id="saveBtn" class="icon-btn" title="Salvar agora" aria-label="Salvar">✓</button>
   </header>
 
@@ -48,6 +50,14 @@
 
     <section class="workspace">
       <div id="tabs" class="tabs"><div class="empty-tab">Nenhum arquivo aberto</div></div>
+      <section id="previewPanel" class="preview-panel" hidden aria-label="Prévia do site">
+        <div class="preview-toolbar">
+          <div><strong>Prévia do projeto</strong><span id="previewStatus">Pronta para iniciar</span></div>
+          <div class="preview-actions"><button id="refreshPreviewBtn" type="button">↻ Atualizar</button><button id="openPreviewTabBtn" type="button">↗ Nova aba</button></div>
+        </div>
+        <iframe id="previewFrame" title="Prévia do site" sandbox="allow-scripts allow-forms allow-modals" hidden></iframe>
+        <div id="previewEmpty" class="preview-empty"><span>▶</span><strong>Prévia parada</strong><p>Inicie a prévia para visualizar seu HTML, CSS e JavaScript.</p></div>
+      </section>
       <div id="welcome" class="welcome">
         <div class="welcome-icon">⌘</div>
         <h2>Seu projeto, em qualquer lugar.</h2>

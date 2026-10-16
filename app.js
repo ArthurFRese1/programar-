@@ -1,3 +1,4 @@
+
 /* CodeTree Mobile — primeira versão funcional */
 (() => {
   "use strict";
@@ -6,6 +7,7 @@
   const DB_VERSION = 1;
   let db, project, openTabs = [], activeId = null, editor, dirty = false, toastTimer;
   let rootDirHandle = null, diskWriteEnabled = false, changeVersion = 0, savingPromise = null;
+  let previewRunning = false, previewUpdateTimer = null, lastPreviewUrl = null;
   const selectedIds = new Set();
   let visibleNodeIds = [];
   let dialogMode = "file", dialogParent = null, dialogTarget = null;
@@ -364,6 +366,98 @@ body {
     }catch(e){if(e.name!=="AbortError")showToast("Não foi possível abrir a pasta: "+e.message);}
   }
   function downloadCurrent() { const n=findNode(activeId);if(!n||n.type!=="file"){showToast("Abra um arquivo primeiro.");return;}if(editor)n.content=editor.getValue();downloadBlob(new Blob([n.content||""],{type:"text/plain;charset=utf-8"}),n.name); }
+  function normalizeProjectPath(path) {
+    const parts=[];
+    for (const part of String(path||"").replace(/\\/g,"/").split("/")) {
+      if (!part || part===".") continue;
+      if (part==="..") parts.pop(); else parts.push(part);
+    }
+    return parts.join("/");
+  }
+  function findProjectFile(path) {
+    const wanted=normalizeProjectPath(path);
+    return flattenNodes(project.nodes).find(item=>!item.isFolder && normalizeProjectPath(item.path)===wanted);
+  }
+  function previewDocument(requestedPath=null, depth=0) {
+    const files=flattenNodes(project.nodes).filter(item=>!item.isFolder);
+    let entry=requestedPath ? findProjectFile(requestedPath) : ((activeId && /\.html?$/i.test(pathOf(activeId)) && findProjectFile(pathOf(activeId))) || findProjectFile("index.html") || files.find(item=>/\.html?$/i.test(item.path)));
+    if(!entry) throw new Error("Não encontrei um arquivo HTML. Crie ou importe um index.html primeiro.");
+    if(depth>8) return {html:"<p>Limite de páginas incorporadas atingido.</p>",path:entry.path};
+    let html=entry.content||"";
+    const entryDir=entry.path.includes("/")?entry.path.slice(0,entry.path.lastIndexOf("/")):"";
+    const resolvePath=(src)=>normalizeProjectPath((entryDir?entryDir+"/":"")+String(src).split(/[?#]/)[0]);
+    const localData=(mime,content)=>`data:${mime};charset=utf-8,${encodeURIComponent(content||"")}`;
+    // Incorpora arquivos locais ao documento para simular os caminhos do projeto sem um servidor HTTP.
+    html=html.replace(/<link\b([^>]*?)href\s*=\s*(["'])(.*?)\2([^>]*)>/gi,(whole,before,q,href,after)=>{
+      if (/^(https?:|data:|\/\/|#|mailto:|javascript:)/i.test(href) || !/stylesheet/i.test(before+after)) return whole;
+      const item=findProjectFile(resolvePath(href));
+      return item ? `<style>\n/* ${href.replace(/[<>]/g,"")} */\n${item.content||""}\n</style>` : whole;
+    });
+    html=html.replace(/<script\b([^>]*?)src\s*=\s*(["'])(.*?)\2([^>]*)>\s*<\/script>/gi,(whole,before,q,src,after)=>{
+      if (/^(https?:|data:|\/\/)/i.test(src)) return whole;
+      const item=findProjectFile(resolvePath(src));
+      return item ? `<script${before}${after}>\n${(item.content||"").replace(/<\/script/gi,"<\\/script")}\n<\/script>` : whole;
+    });
+    // Reescreve iframes para outras páginas HTML do próprio projeto, inclusive em subpastas.
+    html=html.replace(/<iframe\b([^>]*?)src\s*=\s*(["'])(.*?)\2([^>]*)>/gi,(whole,before,q,src,after)=>{
+      if (/^(https?:|data:|\/\/|about:|#)/i.test(src)) return whole;
+      const childPath=resolvePath(src), child=findProjectFile(childPath);
+      if(!child || !/\.html?$/i.test(child.path)) return whole;
+      const childDoc=previewDocument(child.path,depth+1).html;
+      return `<iframe${before}src="${localData("text/html",childDoc)}"${after}>`;
+    });
+    // Faz links para páginas HTML locais navegarem dentro da prévia em vez de saírem para caminhos inexistentes.
+    html=html.replace(/\bhref\s*=\s*(["'])(.*?)\1/gi,(whole,q,href)=>{
+      if (/^(https?:|data:|\/\/|#|mailto:|tel:|javascript:)/i.test(href)) return whole;
+      const target=findProjectFile(resolvePath(href));
+      if(target && /\.html?$/i.test(target.path)) return `href="${localData("text/html",previewDocument(target.path,depth+1).html)}"`;
+      return whole;
+    });
+    return {html,path:entry.path};
+  }
+  function refreshPreview(showMessage=true) {
+    if (!previewRunning) return;
+    try {
+      const result=previewDocument();
+      const frame=$("previewFrame");
+      frame.srcdoc=result.html;
+      frame.hidden=false;
+      $("previewEmpty").hidden=true;
+      $("previewStatus").textContent=`Atualizada: ${result.path}`;
+      if(showMessage) showToast("Prévia atualizada com o código mais recente.");
+    } catch(error) {
+      $("previewStatus").textContent="Não foi possível atualizar";
+      $("previewFrame").hidden=true;
+      $("previewEmpty").hidden=false;
+      $("previewEmpty").querySelector("p").textContent=error.message;
+      if(showMessage) showToast(error.message);
+    }
+  }
+  function startPreview() {
+    previewRunning=true;
+    $("previewPanel").hidden=false;
+    $("tabs").hidden=true;
+    $("welcome").hidden=true;
+    $("editorArea").hidden=true;
+    $("previewBtn").setAttribute("aria-pressed","true");
+    $("previewBtn").textContent="■ Fechar prévia";
+    refreshPreview(false);
+  }
+  function stopPreview() {
+    previewRunning=false;
+    clearTimeout(previewUpdateTimer);
+    $("previewFrame").srcdoc="";
+    $("previewPanel").hidden=true;
+    $("tabs").hidden=false;
+    $("previewBtn").setAttribute("aria-pressed","false");
+    $("previewBtn").textContent="▶ Prévia";
+    if(activeId) $("editorArea").hidden=false; else $("welcome").hidden=false;
+  }
+  function schedulePreviewUpdate() {
+    if(!previewRunning) return;
+    clearTimeout(previewUpdateTimer);
+    previewUpdateTimer=setTimeout(()=>refreshPreview(false),350);
+  }
   function closeSidebarOnMobile(){if(innerWidth<=700){ $("sidebar").classList.remove("open");$("mobileOverlay").classList.remove("show");}}
   function toggleSidebar(){const open=$("sidebar").classList.toggle("open");$("mobileOverlay").classList.toggle("show",open);}
   async function init(){
@@ -371,7 +465,7 @@ body {
     catch(e){showToast("Armazenamento local indisponível. Exporte seus projetos com frequência.");}
     if(!project)project=defaultProject();
     editor=CodeMirror.fromTextArea($("codeEditor"),{theme:"material-darker",lineNumbers:true,indentUnit:2,tabSize:2,indentWithTabs:false,mode:"htmlmixed",lineWrapping:false,viewportMargin:20,extraKeys:{"Tab":cm=>cm.replaceSelection("  ","end"),"Ctrl-S":()=>saveProject(),"Cmd-S":()=>saveProject()}});
-    editor.on("change",()=>{if(activeId){const n=findNode(activeId);if(n)n.content=editor.getValue();scheduleSave();}});
+    editor.on("change",()=>{if(activeId){const n=findNode(activeId);if(n)n.content=editor.getValue();scheduleSave();schedulePreviewUpdate();}});
     editor.on("cursorActivity",()=>{const c=editor.getCursor();$("cursorLabel").textContent=`Linha ${c.line+1}, Coluna ${c.ch+1}`;});
     renderTree();renderTabs();
     if(!await dbGetSafe("main"))await saveProject(true);
@@ -383,7 +477,10 @@ body {
   $("welcomeFileBtn").onclick=()=>openNameDialog("file");
   $("welcomeImportBtn").onclick=()=> $("zipInput").click();
   $("projectMenuBtn").onclick=()=>openNameDialog("project");
-  $("saveBtn").onclick=()=>saveProject();
+  $("saveBtn").onclick=async()=>{await saveProject();if(previewRunning)refreshPreview(false);};
+  $("previewBtn").onclick=()=>previewRunning?stopPreview():startPreview();
+  $("refreshPreviewBtn").onclick=()=>refreshPreview(true);
+  $("openPreviewTabBtn").onclick=()=>{if(!previewRunning)startPreview();try{const result=previewDocument();const blob=new Blob([result.html],{type:"text/html;charset=utf-8"});if(lastPreviewUrl)URL.revokeObjectURL(lastPreviewUrl);lastPreviewUrl=URL.createObjectURL(blob);window.open(lastPreviewUrl,"_blank","noopener");}catch(error){showToast(error.message);}};
   $("exportBtn").onclick=exportZip;
   $("downloadCurrentBtn").onclick=downloadCurrent;
   $("importZipBtn").onclick=()=>$("zipInput").click();
@@ -404,5 +501,3 @@ body {
     window.setInterval(()=>{ if(dirty) saveProject(true); },60000);
   });
 })();
-
-
