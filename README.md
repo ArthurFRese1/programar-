@@ -41,3 +41,11 @@ As bibliotecas CodeMirror e JSZip são carregadas por CDN, portanto o editor com
 - A permissão pode precisar ser concedida novamente em outra sessão. O site não pode ultrapassar as permissões dadas pelo navegador.
 - GitHub Pages hospeda os arquivos do site, mas não sincroniza seus projetos pessoais entre dispositivos.
 - Este MVP importa arquivos de texto. Arquivos binários (imagens, fontes, executáveis etc.) não são preservados corretamente na importação de ZIP nesta versão.
+
+## Atualizações desta versão
+
+- **Salvamento automático a cada 60 segundos:** se houver alterações pendentes, o CodeTree tenta salvar a cada minuto. O botão ✓ continua permitindo salvar imediatamente.
+- **Seleção múltipla:** marque as caixas ao lado de arquivos e pastas; use **Selecionar visíveis** para marcar os itens atualmente exibidos e **Excluir selecionados** para removê-los em lote.
+- **Exclusão na pasta conectada:** quando o navegador concedeu permissão de escrita, o CodeTree tenta apagar os itens selecionados também na pasta real. A exclusão pede confirmação. Se o navegador negar a operação, o item é mantido no projeto e uma mensagem de erro aparece.
+
+O salvamento em intervalo não substitui cópias de segurança. Em celulares, o suporte à escrita direta depende do navegador; quando não estiver disponível, use exportação ZIP.
