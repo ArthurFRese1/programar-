@@ -34,6 +34,10 @@
         <input id="folderInput" type="file" webkitdirectory multiple hidden>
       </div>
       <label class="search-wrap"><span>⌕</span><input id="searchInput" type="search" placeholder="Filtrar arquivos"></label>
+      <div class="selection-toolbar">
+        <button id="selectVisibleBtn" type="button">Selecionar visíveis</button>
+        <button id="deleteSelectedBtn" type="button" disabled>Excluir selecionados (0)</button>
+      </div>
       <div id="tree" class="tree" role="tree" aria-label="Arquivos do projeto"></div>
       <div class="sidebar-foot">
         <button id="exportBtn" class="primary-btn">⇩ Exportar projeto ZIP</button>

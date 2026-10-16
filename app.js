@@ -4,8 +4,10 @@
   const $ = id => document.getElementById(id);
   const DB_NAME = "codetree-mobile-db";
   const DB_VERSION = 1;
-  let db, project, openTabs = [], activeId = null, editor, dirty = false, saveTimer, toastTimer;
-  let rootDirHandle = null, diskWriteEnabled = false;
+  let db, project, openTabs = [], activeId = null, editor, dirty = false, toastTimer;
+  let rootDirHandle = null, diskWriteEnabled = false, changeVersion = 0, savingPromise = null;
+  const selectedIds = new Set();
+  let visibleNodeIds = [];
   let dialogMode = "file", dialogParent = null, dialogTarget = null;
   const collapsed = new Set();
 
@@ -81,23 +83,83 @@ body {
     }
   }
   async function saveProject(silent=false, targetId=activeId) {
+    if (savingPromise) {
+      await savingPromise;
+      if (dirty) return saveProject(silent, targetId);
+      return;
+    }
+    const versionAtStart = changeVersion;
     if (editor && activeId) { const node=findNode(activeId); if(node && node.type==="file") node.content=editor.getValue(); }
-    try {
+    savingPromise = (async () => {
       await dbSet("main", project);
       const target = findNode(targetId);
       let diskSaved = false;
       if (target && target.type === "file" && target.fsHandle && diskWriteEnabled) diskSaved = await writeNodeToDisk(target);
-      dirty=false;
-      if ($("dirtyLabel")) $("dirtyLabel").textContent="Salvo";
-      $("storageStatus").textContent = diskWriteEnabled ? (diskSaved ? "Salvo no arquivo e no navegador" : "Pasta conectada — salvamento automático") : "Salvo neste navegador";
+      if (changeVersion === versionAtStart) {
+        dirty=false;
+        if ($("dirtyLabel")) $("dirtyLabel").textContent="Salvo";
+      } else {
+        dirty=true;
+        if ($("dirtyLabel")) $("dirtyLabel").textContent="Alterações pendentes";
+      }
+      $("storageStatus").textContent = diskWriteEnabled ? (diskSaved ? "Salvo no arquivo e no navegador" : "Pasta conectada — salvamento automático a cada 60 s") : "Salvo neste navegador";
       if(!silent) showToast(diskSaved ? "Alterações gravadas no arquivo real." : "Projeto salvo neste navegador.");
-    }
-    catch(e) { $("storageStatus").textContent="Falha ao salvar"; showToast("Não foi possível salvar. Exporte um ZIP para backup."); }
+    })();
+    try { await savingPromise; }
+    catch(e) { $("storageStatus").textContent="Falha ao salvar"; dirty=true; showToast("Não foi possível salvar. Verifique a permissão ou exporte um ZIP para backup."); }
+    finally { savingPromise = null; }
   }
   function scheduleSave() {
-    dirty=true; $("dirtyLabel").textContent=diskWriteEnabled ? "Salvando…" : "Não salvo";
-    const targetId = activeId;
-    clearTimeout(saveTimer); saveTimer=setTimeout(()=>saveProject(true,targetId),500);
+    changeVersion++;
+    dirty=true;
+    $("dirtyLabel").textContent="Pendente — salva em até 60 s";
+    $("storageStatus").textContent=diskWriteEnabled ? "Alterações pendentes — salvamento em até 60 s" : "Alterações pendentes — salvamento em até 60 s";
+  }
+  function updateSelectionControls() {
+    const count = [...selectedIds].filter(id => !!findNode(id)).length;
+    const deleteBtn = $("deleteSelectedBtn");
+    if (deleteBtn) { deleteBtn.textContent = `Excluir selecionados (${count})`; deleteBtn.disabled = count === 0; }
+    const selectBtn = $("selectVisibleBtn");
+    if (selectBtn) selectBtn.textContent = visibleNodeIds.length && visibleNodeIds.every(id => selectedIds.has(id)) ? "Desmarcar visíveis" : "Selecionar visíveis";
+  }
+  function containsNode(folder, targetId) {
+    return folder.type === "folder" && folder.children.some(child => child.id === targetId || containsNode(child, targetId));
+  }
+  function collectSubtreeIds(node, set) {
+    set.add(node.id);
+    if (node.type === "folder") node.children.forEach(child => collectSubtreeIds(child, set));
+  }
+  async function deleteSelectedNodes() {
+    const selected = [...selectedIds].map(findNode).filter(Boolean);
+    if (!selected.length) { showToast("Selecione pelo menos um arquivo ou pasta."); return; }
+    const roots = selected.filter(node => !selected.some(other => other.id !== node.id && other.type === "folder" && containsNode(other, node.id)));
+    const description = roots.length === 1 ? `Excluir “${roots[0].name}”` : `Excluir ${roots.length} itens selecionados`;
+    if (!confirm(`${description}? Pastas selecionadas também terão todo o seu conteúdo excluído. Esta ação não pode ser desfeita.`)) return;
+    let deletedCount = 0, failedCount = 0, activeWasDeleted = false;
+    for (const node of roots) {
+      const list = findParentList(node.id);
+      if (!list) continue;
+      if (diskWriteEnabled && node.fsParentHandle) {
+        try { await node.fsParentHandle.removeEntry(node.name, { recursive: node.type === "folder" }); }
+        catch (error) { failedCount++; showToast(`Não foi possível excluir “${node.name}” da pasta: ${error.message}`); continue; }
+      }
+      const removedIds = new Set(); collectSubtreeIds(node, removedIds);
+      if (removedIds.has(activeId)) activeWasDeleted = true;
+      list.splice(list.findIndex(item => item.id === node.id), 1);
+      openTabs = openTabs.filter(id => !removedIds.has(id));
+      removedIds.forEach(id => selectedIds.delete(id));
+      deletedCount++;
+    }
+    if (activeWasDeleted) {
+      activeId = null;
+      if (editor) editor.setValue("");
+      $("editorArea").hidden = true; $("welcome").hidden = false;
+    }
+    renderTabs(); renderTree(); updateSelectionControls();
+    await saveProject(true);
+    if (openTabs.length && !activeId) openFile(openTabs[openTabs.length - 1]);
+    if (deletedCount) showToast(`${deletedCount} item(ns) excluído(s)${failedCount ? `; ${failedCount} falharam` : ""}.`);
+    else if (!failedCount) showToast("Nenhum item foi excluído.");
   }
   async function createDiskEntry(parentId, type, name, content="") {
     if (!diskWriteEnabled || !rootDirHandle) return null;
@@ -129,6 +191,7 @@ body {
   function renderTree() {
     $("projectTitle").textContent=project.name;
     const root=$("tree");root.innerHTML="";
+    visibleNodeIds = [];
     const filter=$("searchInput").value.trim().toLowerCase();
     const addNodes=(nodes,depth=0,trail="")=>{
       const sorted=[...nodes].sort((a,b)=>a.type===b.type?(a.name.localeCompare(b.name)):a.type==="folder"?-1:1);
@@ -136,7 +199,9 @@ body {
         const full=trail?trail+"/"+n.name:n.name;
         const childMatches=n.type==="folder"&&hasMatchingChild(n,filter,full);
         if(filter && !n.name.toLowerCase().includes(filter) && !childMatches) continue;
-        const row=document.createElement("div");row.className="tree-row"+(n.id===activeId?" active":"");row.style.paddingLeft=(8+depth*15)+"px";row.setAttribute("role","treeitem");
+        const row=document.createElement("div");row.className="tree-row"+(n.id===activeId?" active":"")+(selectedIds.has(n.id)?" selected":"");row.style.paddingLeft=(8+depth*15)+"px";row.setAttribute("role","treeitem");
+        visibleNodeIds.push(n.id);
+        const checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.className="tree-select";checkbox.checked=selectedIds.has(n.id);checkbox.setAttribute("aria-label","Selecionar "+n.name);checkbox.title="Selecionar para exclusão";checkbox.onclick=e=>e.stopPropagation();checkbox.onchange=()=>{if(checkbox.checked)selectedIds.add(n.id);else selectedIds.delete(n.id);row.classList.toggle("selected",checkbox.checked);updateSelectionControls();};row.append(checkbox);
         const chev=document.createElement("span");chev.className="chevron";chev.textContent=n.type==="folder"?(collapsed.has(n.id)? "▸":"▾"):"";row.append(chev);
         const ico=document.createElement("span");ico.className="tree-icon";ico.textContent=iconFor(n);row.append(ico);
         const label=document.createElement("span");label.className="tree-name";label.textContent=n.name;label.title=full;row.append(label);
@@ -152,6 +217,7 @@ body {
     };
     addNodes(project.nodes);
     if(!root.children.length){const p=document.createElement("div");p.className="empty-tab";p.textContent=filter?"Nenhum arquivo encontrado.":"Projeto vazio. Crie uma pasta ou arquivo.";root.append(p);}
+    updateSelectionControls();
   }
   function hasMatchingChild(folder,filter,trail) {
     if(!filter)return false;
@@ -243,7 +309,7 @@ body {
           try { await node.fsParentHandle.removeEntry(node.name, {recursive:node.type==="folder"}); }
           catch(error) { showToast("Não foi possível excluir no disco: " + error.message); return; }
         }
-        const removeIds=new Set();const collect=n=>{removeIds.add(n.id);if(n.type==="folder")n.children.forEach(collect);};collect(node);list.splice(list.findIndex(n=>n.id===node.id),1);openTabs=openTabs.filter(id=>!removeIds.has(id));if(removeIds.has(activeId)){activeId=null;$("editorArea").hidden=true;$("welcome").hidden=false;}renderTabs();renderTree();saveProject(true);showToast("Item excluído.");}
+        const removeIds=new Set();const collect=n=>{removeIds.add(n.id);if(n.type==="folder")n.children.forEach(collect);};collect(node);list.splice(list.findIndex(n=>n.id===node.id),1);openTabs=openTabs.filter(id=>!removeIds.has(id));removeIds.forEach(id=>selectedIds.delete(id));if(removeIds.has(activeId)){activeId=null;$("editorArea").hidden=true;$("welcome").hidden=false;}renderTabs();renderTree();saveProject(true);showToast("Item excluído.");}
     } else if(choice.toLowerCase()==="n"&&node.type==="folder")openNameDialog("folder",node.id);
   }
   function flattenNodes(nodes,base="") { const out=[];for(const n of nodes){const path=base?base+"/"+n.name:n.name;if(n.type==="folder"){out.push({path,isFolder:true});out.push(...flattenNodes(n.children,path));}else out.push({path,content:n.content||""});}return out; }
@@ -263,7 +329,7 @@ body {
       const ensureFolder=(parts)=>{let nodes=root.nodes,folder=null;for(const part of parts){folder=nodes.find(n=>n.type==="folder"&&n.name===part);if(!folder){folder={id:uid(),type:"folder",name:part,children:[]};nodes.push(folder);}nodes=folder.children;}return nodes;};
       const entries=Object.values(zip.files).filter(f=>!f.dir);
       for(const entry of entries){const parts=entry.name.split("/").filter(Boolean);if(!parts.length)continue;const name=parts.pop();const list=ensureFolder(parts);const content=await entry.async("string");const existing=list.find(n=>n.name===name);if(existing&&existing.type==="file")existing.content=content;else list.push({id:uid(),type:"file",name,content});}
-      project=root;openTabs=[];activeId=null;$("editorArea").hidden=true;$("welcome").hidden=false;renderTree();renderTabs();await saveProject(true);showToast(`Projeto importado: ${entries.length} arquivo(s).`);
+      project=root;openTabs=[];activeId=null;selectedIds.clear();$("editorArea").hidden=true;$("welcome").hidden=false;renderTree();renderTabs();await saveProject(true);showToast(`Projeto importado: ${entries.length} arquivo(s).`);
     }catch(e){showToast("Não consegui abrir esse ZIP: "+e.message);}
   }
   async function importFolderFiles(files) {
@@ -271,7 +337,7 @@ body {
     const rootName=(list[0].webkitRelativePath||list[0].name).split("/")[0]||"Projeto importado";
     const root={name:rootName,nodes:[]};
     for(const file of list){const rel=file.webkitRelativePath||file.name;const parts=rel.split("/").filter(Boolean);const name=parts.pop();let nodes=root.nodes;for(const part of parts){let f=nodes.find(n=>n.type==="folder"&&n.name===part);if(!f){f={id:uid(),type:"folder",name:part,children:[]};nodes.push(f);}nodes=f.children;}nodes.push({id:uid(),type:"file",name,content:await file.text()});}
-    project=root;openTabs=[];activeId=null;$("editorArea").hidden=true;$("welcome").hidden=false;renderTree();renderTabs();await saveProject(true);showToast(`Pasta importada: ${list.length} arquivo(s).`);
+    project=root;openTabs=[];activeId=null;selectedIds.clear();$("editorArea").hidden=true;$("welcome").hidden=false;renderTree();renderTabs();await saveProject(true);showToast(`Pasta importada: ${list.length} arquivo(s).`);
   }
   async function openRealFolder() {
     if(!("showDirectoryPicker" in window)){
@@ -292,7 +358,7 @@ body {
         }
       }
       const root={name:handle.name,nodes:[]};await readDir(handle,root.nodes,handle);
-      project=root;openTabs=[];activeId=null;$("editorArea").hidden=true;$("welcome").hidden=false;
+      project=root;openTabs=[];activeId=null;selectedIds.clear();$("editorArea").hidden=true;$("welcome").hidden=false;
       await requestWritePermission(handle);renderTree();renderTabs();await saveProject(true);
       showToast(diskWriteEnabled ? "Pasta conectada! Alterações serão gravadas nos arquivos reais." : "Pasta aberta em modo de leitura; o navegador não concedeu escrita.");
     }catch(e){if(e.name!=="AbortError")showToast("Não foi possível abrir a pasta: "+e.message);}
@@ -325,8 +391,71 @@ body {
   $("zipInput").onchange=async e=>{const f=e.target.files[0];if(f)await importZipFile(f);e.target.value="";};
   $("folderInput").onchange=async e=>{if(e.target.files.length)await importFolderFiles(e.target.files);e.target.value="";};
   $("searchInput").oninput=renderTree;
+  $("selectVisibleBtn").onclick=()=>{
+    const allSelected=visibleNodeIds.length>0&&visibleNodeIds.every(id=>selectedIds.has(id));
+    visibleNodeIds.forEach(id=>allSelected?selectedIds.delete(id):selectedIds.add(id));
+    renderTree();
+  };
+  $("deleteSelectedBtn").onclick=deleteSelectedNodes;
   $("menuBtn").onclick=toggleSidebar;
   $("mobileOverlay").onclick=closeSidebarOnMobile;
   window.addEventListener("beforeunload",e=>{if(dirty){e.preventDefault();e.returnValue="";}});
-  init();
+  init().then(()=>{
+    window.setInterval(()=>{ if(dirty) saveProject(true); },60000);
+  });
 })();
+
+==================== ARQUIVO: README.md ====================
+
+
+# CodeTree Mobile
+
+Primeira versão de um gerenciador e editor de projetos web, pensado para celular e hospedagem estática no GitHub Pages.
+
+## O que já funciona
+- Árvore de pastas e arquivos.
+- Criar arquivos e pastas, inclusive subpastas.
+- Renomear e excluir itens.
+- Abas para alternar entre arquivos.
+- Editor com realce de sintaxe para HTML, CSS e JavaScript.
+- Salvamento automático no IndexedDB do navegador.
+- Importar projeto ZIP e exportar ZIP.
+- Conectar uma pasta real com permissão de leitura e escrita (File System Access API, em navegadores compatíveis).
+- Gravar automaticamente as alterações do editor nos arquivos reais quando a pasta estiver conectada e a permissão de escrita for concedida.
+- Criar e excluir itens na pasta conectada; renomeação de pastas depende do suporte do navegador.
+- Importar pasta como cópia quando o navegador não oferecer acesso direto.
+- Baixar o arquivo aberto.
+- Layout responsivo para celular e computador.
+
+## Executar localmente
+1. Extraia o ZIP.
+2. Abra `index.html` no navegador. Para evitar restrições de alguns navegadores, prefira um servidor local simples:
+   - No VS Code, instale/ative Live Server e clique em **Go Live**; ou
+   - com Python instalado, abra o terminal na pasta e rode `python -m http.server 8000`, depois abra `http://localhost:8000`.
+
+As bibliotecas CodeMirror e JSZip são carregadas por CDN, portanto o editor com realce e o ZIP precisam de internet.
+
+## Publicar no GitHub Pages
+1. Crie um repositório no GitHub, por exemplo `codetree-mobile`.
+2. Envie `index.html`, `style.css`, `app.js` e `README.md` para a raiz do repositório.
+3. No GitHub, entre em **Settings → Pages**.
+4. Em **Build and deployment**, escolha **Deploy from a branch**.
+5. Selecione a branch `main` e a pasta `/ (root)`, depois clique em **Save**.
+6. Aguarde a publicação. A URL será parecida com `https://SEU-USUARIO.github.io/codetree-mobile/`.
+
+## Observações importantes
+- O salvamento é local ao navegador e dispositivo. Limpar os dados do site pode apagar projetos salvos. Exporte backups ZIP.
+- O site não envia arquivos a um servidor.
+- Para salvar diretamente em arquivos existentes, abra o site em um navegador compatível (normalmente Chrome ou Edge em computador), clique em **Conectar pasta** e conceda permissão de leitura e escrita. O site precisa estar em contexto seguro: HTTPS (GitHub Pages) ou localhost.
+- Se o navegador não oferecer a API de acesso a pastas, o seletor alternativo importa uma cópia; nesse modo, alterações não são gravadas na pasta original.
+- A permissão pode precisar ser concedida novamente em outra sessão. O site não pode ultrapassar as permissões dadas pelo navegador.
+- GitHub Pages hospeda os arquivos do site, mas não sincroniza seus projetos pessoais entre dispositivos.
+- Este MVP importa arquivos de texto. Arquivos binários (imagens, fontes, executáveis etc.) não são preservados corretamente na importação de ZIP nesta versão.
+
+## Atualizações desta versão
+
+- **Salvamento automático a cada 60 segundos:** se houver alterações pendentes, o CodeTree tenta salvar a cada minuto. O botão ✓ continua permitindo salvar imediatamente.
+- **Seleção múltipla:** marque as caixas ao lado de arquivos e pastas; use **Selecionar visíveis** para marcar os itens atualmente exibidos e **Excluir selecionados** para removê-los em lote.
+- **Exclusão na pasta conectada:** quando o navegador concedeu permissão de escrita, o CodeTree tenta apagar os itens selecionados também na pasta real. A exclusão pede confirmação. Se o navegador negar a operação, o item é mantido no projeto e uma mensagem de erro aparece.
+
+O salvamento em intervalo não substitui cópias de segurança. Em celulares, o suporte à escrita direta depende do navegador; quando não estiver disponível, use exportação ZIP.
